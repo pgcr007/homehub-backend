@@ -1,0 +1,35 @@
+{
+  "name": "homehub-backend",
+  "version": "1.0.0",
+  "description": "HomeHub — Smart Home IoT Dashboard backend (Express + Mongoose + MQTT)",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "jest --runInBand",
+    "test:watch": "jest --watch"
+  },
+  "dependencies": {
+    "express": "^5.0.1",
+    "mongoose": "^8.9.5",
+    "jsonwebtoken": "^9.0.2",
+    "bcryptjs": "^2.4.3",
+    "helmet": "^8.0.0",
+    "cors": "^2.8.5",
+    "express-rate-limit": "^7.5.0",
+    "dotenv": "^16.4.7",
+    "mqtt": "^5.10.3",
+    "socket.io": "^4.8.1",
+    "morgan": "^1.10.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0",
+    "nodemon": "^3.1.9",
+    "mongodb-memory-server": "^10.1.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
