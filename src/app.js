@@ -9,9 +9,14 @@ const userRoutes = require('./routes/userRoutes');
 const requireAuth = require('./middleware/requireAuth');
 const User = require('./models/User');
 const { publishTest } = require('./services/mqttService');
-const { sendToTokens } = require('./services/fcmService');
+const { sendToTokens, getStaleTokens } = require('./services/fcmService');
 
 const app = express();
+
+// Render (and most PaaS hosts) sit behind a reverse proxy that sets
+// X-Forwarded-For. Trust the first hop so express-rate-limit can resolve
+// real client IPs instead of throwing ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+app.set('trust proxy', 1);
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
   .split(',')
@@ -29,6 +34,7 @@ if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
 }
 
+// Generous global limiter; auth routes get a tighter one below
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -48,6 +54,7 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'homehub-backend' });
 });
 
+// Phase 1 sanity check: hit this to confirm MQTT publish/subscribe works end to end
 app.post('/health/mqtt-test', (_req, res) => {
   try {
     publishTest();
@@ -57,6 +64,7 @@ app.post('/health/mqtt-test', (_req, res) => {
   }
 });
 
+// Phase 1 sanity check: hit this to confirm FCM push works end to end
 app.post('/health/fcm-test', requireAuth, async (req, res) => {
   try {
     const user = await User.findById(req.userId);
@@ -64,7 +72,13 @@ app.post('/health/fcm-test', requireAuth, async (req, res) => {
       user.fcmTokens,
       { title: 'HomeHub test', body: 'FCM is wired up correctly 🎉' }
     );
-    res.json({ status: 'sent', result });
+
+    const staleTokens = getStaleTokens(user.fcmTokens, result);
+    if (staleTokens.length) {
+      await User.findByIdAndUpdate(user._id, { $pullAll: { fcmTokens: staleTokens } });
+    }
+
+    res.json({ status: 'sent', result, prunedStaleTokens: staleTokens.length });
   } catch (err) {
     res.status(503).json({ error: err.message });
   }
@@ -73,12 +87,12 @@ app.post('/health/fcm-test', requireAuth, async (req, res) => {
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/user', userRoutes);
 
-// 404 handler — must stay last, after all real routes
+// 404 handler
 app.use((req, res) => {
   res.status(404).json({ error: `no route for ${req.method} ${req.path}` });
 });
 
-// Central error handler — must stay last of all
+// Central error handler
 app.use((err, _req, res, _next) => {
   console.error('[error]', err);
   res.status(err.status || 500).json({ error: err.message || 'internal server error' });

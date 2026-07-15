@@ -44,4 +44,17 @@ async function sendToTokens(tokens, notification, data = {}) {
   });
 }
 
-module.exports = { initFirebase, sendToTokens };
+function getStaleTokens(tokens, result) {
+  if (!result || !result.responses) return [];
+  return result.responses
+    .map((resp, i) => ({ resp, token: tokens[i] }))
+    .filter(
+      ({ resp }) =>
+        !resp.success &&
+        (resp.error?.code === 'messaging/registration-token-not-registered' ||
+          resp.error?.code === 'messaging/invalid-registration-token')
+    )
+    .map(({ token }) => token);
+}
+
+module.exports = { initFirebase, sendToTokens, getStaleTokens };
