@@ -5,7 +5,11 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
 const authRoutes = require('./routes/authRoutes');
+const userRoutes = require('./routes/userRoutes');
+const requireAuth = require('./middleware/requireAuth');
+const User = require('./models/User');
 const { publishTest } = require('./services/mqttService');
+const { sendToTokens } = require('./services/fcmService');
 
 const app = express();
 
@@ -25,7 +29,6 @@ if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
 }
 
-// Generous global limiter; auth routes get a tighter one below
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -45,7 +48,6 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', service: 'homehub-backend' });
 });
 
-// Phase 1 sanity check: hit this to confirm MQTT publish/subscribe works end to end
 app.post('/health/mqtt-test', (_req, res) => {
   try {
     publishTest();
@@ -55,14 +57,28 @@ app.post('/health/mqtt-test', (_req, res) => {
   }
 });
 
-app.use('/api/auth', authLimiter, authRoutes);
+app.post('/health/fcm-test', requireAuth, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    const result = await sendToTokens(
+      user.fcmTokens,
+      { title: 'HomeHub test', body: 'FCM is wired up correctly 🎉' }
+    );
+    res.json({ status: 'sent', result });
+  } catch (err) {
+    res.status(503).json({ error: err.message });
+  }
+});
 
-// 404 handler
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/user', userRoutes);
+
+// 404 handler — must stay last, after all real routes
 app.use((req, res) => {
   res.status(404).json({ error: `no route for ${req.method} ${req.path}` });
 });
 
-// Central error handler
+// Central error handler — must stay last of all
 app.use((err, _req, res, _next) => {
   console.error('[error]', err);
   res.status(err.status || 500).json({ error: err.message || 'internal server error' });
