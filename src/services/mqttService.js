@@ -56,4 +56,13 @@ function publishTest(message = 'hello from homehub-backend') {
   client.publish('homehub/test/ping', message);
 }
 
-module.exports = { connectMQTT, getMQTTClient, publishTest };
+function publishNormalizedEvent(device, normalizedState) {
+  if (!client || !client.connected) {
+    console.warn('[mqtt] not connected, skipping republish of normalized event');
+    return;
+  }
+  const topic = `home/${device.owner}/${device._id}/normalized`;
+  client.publish(topic, JSON.stringify(normalizedState), { retain: true });
+}
+
+module.exports = { connectMQTT, getMQTTClient, publishTest, publishNormalizedEvent };

@@ -6,6 +6,9 @@ const rateLimit = require('express-rate-limit');
 
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
+const deviceRoutes = require('./routes/deviceRoutes');
+const roomRoutes = require('./routes/roomRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 const requireAuth = require('./middleware/requireAuth');
 const User = require('./models/User');
 const { publishTest } = require('./services/mqttService');
@@ -29,6 +32,19 @@ app.use(
     origin: allowedOrigins.length ? allowedOrigins : true,
   })
 );
+
+// Webhook ingestion is mounted BEFORE express.json(): it needs the raw
+// request bytes (via its own express.raw()) to verify the HMAC signature,
+// and consuming the body here would leave nothing for it to read. It's also
+// the single public HTTP door into the system per the security checklist,
+// so it gets its own (tighter, unauthenticated-friendly) rate limiter below.
+const webhookLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { error: 'too many webhook requests, slow down' },
+});
+app.use('/api/webhooks', webhookLimiter, webhookRoutes);
+
 app.use(express.json());
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan('dev'));
@@ -86,6 +102,8 @@ app.post('/health/fcm-test', requireAuth, async (req, res) => {
 
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/devices', deviceRoutes);
+app.use('/api/rooms', roomRoutes);
 
 // 404 handler
 app.use((req, res) => {
