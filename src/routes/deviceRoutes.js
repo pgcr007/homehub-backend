@@ -7,6 +7,7 @@ const {
   getWebhookSecret,
   updateDevice,
   deleteDevice,
+  sendCommand,
 } = require('../controllers/deviceController');
 
 const router = express.Router();
@@ -17,6 +18,7 @@ router.post('/', createDevice);
 router.get('/', listDevices);
 router.get('/:id', getDevice);
 router.get('/:id/webhook-secret', getWebhookSecret);
+router.post('/:id/command', sendCommand);
 router.patch('/:id', updateDevice);
 router.delete('/:id', deleteDevice);
 

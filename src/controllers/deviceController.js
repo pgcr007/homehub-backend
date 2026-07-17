@@ -1,6 +1,7 @@
 const Device = require('../models/Device');
 const Room = require('../models/Room');
 const { deriveDeviceSecret } = require('../services/webhookAuth');
+const { publishCommand } = require('../services/mqttService');
 
 const { DEVICE_TYPES, DEVICE_TYPE_NAMES } = Device;
 
@@ -89,6 +90,36 @@ async function getDevice(req, res) {
 }
 
 /**
+ * POST /api/devices/:id/command
+ * body: { <capability>: <value>, ... } e.g. { "power": "on" } or { "power": "on", "brightness": 60 }
+ * Only MQTT-protocol devices accept commands this way — webhook-protocol
+ * devices (the thermostat) would need a vendor-specific outbound call,
+ * which is out of scope for now.
+ */
+async function sendCommand(req, res) {
+  try {
+    const device = await Device.findOne({ _id: req.params.id, owner: req.userId });
+    if (!device) return res.status(404).json({ error: 'device not found' });
+
+    if (device.protocol !== 'mqtt') {
+      return res.status(400).json({ error: 'this device does not accept commands over MQTT' });
+    }
+
+    const command = req.body;
+    if (!command || typeof command !== 'object' || Array.isArray(command) || Object.keys(command).length === 0) {
+      return res.status(400).json({ error: 'command body must be a non-empty object, e.g. { "power": "on" }' });
+    }
+
+    const topic = publishCommand(device, command);
+    return res.json({ status: 'sent', topic, command });
+  } catch (err) {
+    console.error('[devices] command error:', err.message);
+    return res.status(500).json({ error: 'failed to send command' });
+  }
+}
+
+
+/**
  * GET /api/devices/:id/webhook-secret
  * Separate from the main device payload so the secret isn't echoed back on
  * every ordinary list/get call — only fetched when actually needed.
@@ -149,4 +180,5 @@ module.exports = {
   getWebhookSecret,
   updateDevice,
   deleteDevice,
+  sendCommand,
 };

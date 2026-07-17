@@ -84,4 +84,14 @@ function publishNormalizedEvent(device, normalizedState) {
   client.publish(topic, JSON.stringify(normalizedState), { retain: true });
 }
 
-module.exports = { connectMQTT, getMQTTClient, publishTest, publishNormalizedEvent };
+function publishCommand(device, command) {
+  if (!client || !client.connected) {
+    throw new Error('MQTT client is not connected, cannot send command');
+  }
+  const topic = `home/${device.owner}/${device.identifier}/cmd`;
+  client.publish(topic, JSON.stringify(command));
+  return topic;
+}
+
+
+module.exports = { connectMQTT, getMQTTClient, publishTest, publishNormalizedEvent, publishCommand };

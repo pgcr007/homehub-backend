@@ -3,6 +3,7 @@ const helmet = require('helmet');
 const cors = require('cors');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
+const eventRoutes = require('./routes/eventRoutes');
 
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
@@ -104,6 +105,7 @@ app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/rooms', roomRoutes);
+app.use('/api/events', eventRoutes);
 
 // 404 handler
 app.use((req, res) => {

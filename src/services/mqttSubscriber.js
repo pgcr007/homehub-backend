@@ -130,6 +130,11 @@ async function handleStatusTopic(ownerId, identifier, payloadBuffer) {
     normalizedState: {},
     rawPayload: null,
   });
+
+  // Push the status flip live too, not just capability state — same lazy
+  // require as publishNormalizedEvent above, same circular-import reason.
+  const { emitDeviceEvent } = require('./socketService');
+  emitDeviceEvent(device.owner.toString(), { deviceId: device._id.toString(), status: device.status });
 }
 
 /**

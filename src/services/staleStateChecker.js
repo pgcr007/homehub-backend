@@ -1,5 +1,7 @@
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
+  const { emitDeviceEvent } = require('./socketService');
+
 
 /**
  * Phase 3 risk item: "lastSeen threshold, 'unknown' state distinct from 'off'."
@@ -38,6 +40,7 @@ async function checkStaleDevices() {
     status: 'online',
     lastSeen: { $lt: cutoff },
   });
+  
 
   for (const device of staleDevices) {
     device.status = 'unknown';
@@ -51,6 +54,8 @@ async function checkStaleDevices() {
       normalizedState: {},
       rawPayload: null,
     });
+
+    emitDeviceEvent(device.owner.toString(), { deviceId: device._id.toString(), status: 'unknown' });
   }
 
   return staleDevices.length;
