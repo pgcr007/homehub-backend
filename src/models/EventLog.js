@@ -19,11 +19,14 @@ const eventLogSchema = new mongoose.Schema(
       enum: ['mqtt', 'webhook', 'rule'],
       required: true,
     },
-    // 'state_change' covers most events; 'online'/'offline' are reserved for
-    // Phase 3's LWT/heartbeat handling; 'rule_fired' is reserved for Phase 5.
+    // 'state_change' covers most events; 'online'/'offline' are Phase 3's
+    // LWT/heartbeat handling (explicit broker-detected connect/disconnect);
+    // 'unknown' is Phase 3's separate stale-state sweep (lastSeen threshold
+    // exceeded with no explicit LWT ever received — a distinct claim from
+    // "offline", see staleStateChecker.js); 'rule_fired' is reserved for Phase 5.
     type: {
       type: String,
-      enum: ['state_change', 'online', 'offline', 'rule_fired'],
+      enum: ['state_change', 'online', 'offline', 'unknown', 'rule_fired'],
       required: true,
     },
     // The normalized { capability: value } diff that produced this entry —
