@@ -57,4 +57,25 @@ function getStaleTokens(tokens, result) {
     .map(({ token }) => token);
 }
 
-module.exports = { initFirebase, sendToTokens, getStaleTokens };
+/**
+ * Looks up a user's tokens, sends, and prunes stale tokens in one call —
+ * the exact sequence app.js's /health/fcm-test route already does by hand.
+ * Added for Phase 5's rule engine `notify` action, but generic enough for
+ * any future caller that just wants "push this user a notification."
+ */
+async function sendToUser(userId, notification) {
+  const User = require('../models/User');
+  const user = await User.findById(userId);
+  if (!user || !user.fcmTokens?.length) return null;
+
+  const result = await sendToTokens(user.fcmTokens, notification);
+
+  const staleTokens = getStaleTokens(user.fcmTokens, result);
+  if (staleTokens.length) {
+    await User.findByIdAndUpdate(user._id, { $pullAll: { fcmTokens: staleTokens } });
+  }
+
+  return result;
+}
+
+module.exports = { initFirebase, sendToTokens, getStaleTokens, sendToUser };

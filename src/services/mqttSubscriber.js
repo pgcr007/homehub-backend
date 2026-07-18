@@ -72,6 +72,17 @@ async function handleStateTopic(ownerId, identifier, payloadBuffer) {
     return;
   }
 
+  // Captured before the merge below so the rule engine's 'changed' operator
+  // and the EventLog entry both have a true before/after to compare against.
+  const previousState = { ...device.state };
+
+  // Phase 5: was this event caused by a rule's device_command action
+  // (published to this same device moments ago), or is it organic? Consumed
+  // now so both the EventLog entry and the rule evaluation below agree on
+  // the same chain context.
+  const { evaluateRulesForEvent, consumePendingChain } = require('./ruleEngine');
+  const { chainId, chainDepth } = consumePendingChain(device._id);
+
   device.state = { ...device.state, ...normalizedState };
   device.status = 'online';
   device.lastSeen = new Date();
@@ -84,6 +95,8 @@ async function handleStateTopic(ownerId, identifier, payloadBuffer) {
     type: 'state_change',
     normalizedState,
     rawPayload: payload,
+    chainId,
+    chainDepth,
   });
 
   // Lazy require: mqttService requires this module to wire its message
@@ -93,6 +106,8 @@ async function handleStateTopic(ownerId, identifier, payloadBuffer) {
   // require below always resolves to the fully-populated module.
   const { publishNormalizedEvent } = require('./mqttService');
   publishNormalizedEvent(device, normalizedState);
+
+  await evaluateRulesForEvent({ device, normalizedState, previousState, chainId, chainDepth });
 }
 
 /**

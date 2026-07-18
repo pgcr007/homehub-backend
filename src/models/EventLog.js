@@ -24,9 +24,12 @@ const eventLogSchema = new mongoose.Schema(
     // 'unknown' is Phase 3's separate stale-state sweep (lastSeen threshold
     // exceeded with no explicit LWT ever received — a distinct claim from
     // "offline", see staleStateChecker.js); 'rule_fired' is reserved for Phase 5.
+    // 'rule_blocked' is Phase 5's loop-protection record: a rule's trigger
+    // matched, but it was reached via a chain that already hit that rule's
+    // maxChainDepth, so it was logged and skipped rather than fired.
     type: {
       type: String,
-      enum: ['state_change', 'online', 'offline', 'unknown', 'rule_fired'],
+      enum: ['state_change', 'online', 'offline', 'unknown', 'rule_fired', 'rule_blocked'],
       required: true,
     },
     // The normalized { capability: value } diff that produced this entry —
@@ -40,6 +43,19 @@ const eventLogSchema = new mongoose.Schema(
     rawPayload: {
       type: mongoose.Schema.Types.Mixed,
       default: null,
+    },
+    // Phase 5 loop-protection/tracing: null/0 for an organic, user- or
+    // device-originated event. When a rule action causes a device to report
+    // a new state, that resulting event (and any rule it triggers in turn)
+    // shares the same chainId with chainDepth incremented by one hop, so a
+    // whole A-caused-B-caused-C cascade can be reconstructed from the log.
+    chainId: {
+      type: String,
+      default: null,
+    },
+    chainDepth: {
+      type: Number,
+      default: 0,
     },
   },
   { timestamps: true }

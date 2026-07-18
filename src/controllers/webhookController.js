@@ -3,6 +3,7 @@ const EventLog = require('../models/EventLog');
 const { normalizeEvent } = require('../services/eventNormalizer');
 const { verifySignature } = require('../services/webhookAuth');
 const { publishNormalizedEvent } = require('../services/mqttService');
+const { evaluateRulesForEvent, consumePendingChain } = require('../services/ruleEngine');
 
 /**
  * POST /api/webhooks/:deviceId
@@ -53,6 +54,9 @@ async function handleWebhookEvent(req, res) {
   }
 
   try {
+    const previousState = { ...device.state };
+    const { chainId, chainDepth } = consumePendingChain(device._id);
+
     device.state = { ...device.state, ...normalizedState };
     device.status = 'online';
     device.lastSeen = new Date();
@@ -65,9 +69,13 @@ async function handleWebhookEvent(req, res) {
       type: 'state_change',
       normalizedState,
       rawPayload: payload,
+      chainId,
+      chainDepth,
     });
 
     publishNormalizedEvent(device, normalizedState);
+
+    await evaluateRulesForEvent({ device, normalizedState, previousState, chainId, chainDepth });
 
     return res.json({ status: 'ok', state: device.state });
   } catch (err) {

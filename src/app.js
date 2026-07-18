@@ -3,12 +3,13 @@ const helmet = require('helmet');
 const cors = require('cors');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
-const eventRoutes = require('./routes/eventRoutes');
 
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
 const deviceRoutes = require('./routes/deviceRoutes');
 const roomRoutes = require('./routes/roomRoutes');
+const eventRoutes = require('./routes/eventRoutes');
+const ruleRoutes = require('./routes/ruleRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const requireAuth = require('./middleware/requireAuth');
 const User = require('./models/User');
@@ -106,6 +107,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/events', eventRoutes);
+app.use('/api/rules', ruleRoutes);
 
 // 404 handler
 app.use((req, res) => {
