@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 
 const authRoutes = require('./routes/authRoutes');
 const userRoutes = require('./routes/userRoutes');
+const householdRoutes = require('./routes/householdRoutes');
 const deviceRoutes = require('./routes/deviceRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const eventRoutes = require('./routes/eventRoutes');
@@ -104,6 +105,7 @@ app.post('/health/fcm-test', requireAuth, async (req, res) => {
 
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/user', userRoutes);
+app.use('/api/households', householdRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/events', eventRoutes);
