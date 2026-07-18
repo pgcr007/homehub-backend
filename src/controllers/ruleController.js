@@ -103,6 +103,15 @@ async function createRule(req, res) {
       ...(maxChainDepth !== undefined ? { maxChainDepth } : {}),
     });
 
+    // Populate device refs so this response matches listRules' shape —
+    // the Android client's ClauseDto/ActionDto expect device to be an
+    // object ({_id, name, type}), not a raw ObjectId string.
+    await rule.populate([
+      { path: 'trigger.device', select: 'name type' },
+      { path: 'conditions.device', select: 'name type' },
+      { path: 'actions.device', select: 'name type' },
+    ]);
+
     const response = { rule };
     if (rule.enabled) {
       const conflicts = await findConflictingRules(rule, req.userId, rule._id);
@@ -154,6 +163,12 @@ async function toggleRule(req, res) {
       { new: true }
     );
     if (!rule) return res.status(404).json({ error: 'rule not found' });
+
+    await rule.populate([
+      { path: 'trigger.device', select: 'name type' },
+      { path: 'conditions.device', select: 'name type' },
+      { path: 'actions.device', select: 'name type' },
+    ]);
 
     const response = { rule };
     if (rule.enabled) {
