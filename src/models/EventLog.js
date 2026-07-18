@@ -58,7 +58,7 @@ const eventLogSchema = new mongoose.Schema(
       default: 0,
     },
   },
-  { timestamps: true }
+  { timestamps: true, minimize: false }
 );
 
 eventLogSchema.index({ owner: 1, createdAt: -1 });

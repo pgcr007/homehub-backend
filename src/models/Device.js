@@ -79,7 +79,7 @@ const deviceSchema = new mongoose.Schema(
       default: null,
     },
   },
-  { timestamps: true }
+  { timestamps: true, minimize: false }
 );
 
 // A given owner can't register the same MQTT topic / webhook path twice.
