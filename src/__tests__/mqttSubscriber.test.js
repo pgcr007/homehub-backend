@@ -28,7 +28,8 @@ const {
 async function createDevice(overrides = {}) {
   return Device.create({
     name: 'Test Plug',
-    owner: new mongoose.Types.ObjectId(),
+    household: new mongoose.Types.ObjectId(),
+    createdBy: new mongoose.Types.ObjectId(),
     type: 'tasmota_plug',
     protocol: 'mqtt',
     identifier: 'plug-1',
@@ -55,7 +56,7 @@ describe('mqttSubscriber', () => {
       const device = await createDevice();
       const payload = Buffer.from(JSON.stringify({ POWER: 'ON' }));
 
-      await handleStateTopic(device.owner.toString(), device.identifier, payload);
+      await handleStateTopic(device.household.toString(), device.identifier, payload);
 
       const updated = await Device.findById(device._id);
       expect(updated.state).toEqual({ power: 'on' });
@@ -67,6 +68,7 @@ describe('mqttSubscriber', () => {
       expect(events[0].source).toBe('mqtt');
       expect(events[0].type).toBe('state_change');
       expect(events[0].normalizedState).toEqual({ power: 'on' });
+      expect(events[0].household.toString()).toBe(device.household.toString());
 
       expect(publishNormalizedEvent).toHaveBeenCalledWith(
         expect.objectContaining({ _id: device._id }),
@@ -74,7 +76,7 @@ describe('mqttSubscriber', () => {
       );
     });
 
-    it('drops the message silently when no device matches owner+identifier', async () => {
+    it('drops the message silently when no device matches household+identifier', async () => {
       await handleStateTopic(new mongoose.Types.ObjectId().toString(), 'nonexistent', Buffer.from('{}'));
       expect(await EventLog.countDocuments()).toBe(0);
       expect(publishNormalizedEvent).not.toHaveBeenCalled();
@@ -86,7 +88,7 @@ describe('mqttSubscriber', () => {
         protocol: 'webhook',
         identifier: 'thermo-1',
       });
-      await handleStateTopic(device.owner.toString(), device.identifier, Buffer.from(JSON.stringify({ temp: 20 })));
+      await handleStateTopic(device.household.toString(), device.identifier, Buffer.from(JSON.stringify({ temp: 20 })));
 
       const updated = await Device.findById(device._id);
       expect(updated.status).toBe('unknown'); // untouched default
@@ -96,7 +98,7 @@ describe('mqttSubscriber', () => {
     it('drops malformed JSON without throwing', async () => {
       const device = await createDevice();
       await expect(
-        handleStateTopic(device.owner.toString(), device.identifier, Buffer.from('not json'))
+        handleStateTopic(device.household.toString(), device.identifier, Buffer.from('not json'))
       ).resolves.toBeUndefined();
       expect(await EventLog.countDocuments()).toBe(0);
     });
@@ -104,7 +106,7 @@ describe('mqttSubscriber', () => {
     it('drops a payload that fails normalization without throwing', async () => {
       const device = await createDevice(); // tasmota_plug expects a POWER field
       await expect(
-        handleStateTopic(device.owner.toString(), device.identifier, Buffer.from(JSON.stringify({ nope: true })))
+        handleStateTopic(device.household.toString(), device.identifier, Buffer.from(JSON.stringify({ nope: true })))
       ).resolves.toBeUndefined();
       expect(await EventLog.countDocuments()).toBe(0);
     });
@@ -113,7 +115,7 @@ describe('mqttSubscriber', () => {
   describe('handleStatusTopic (LWT)', () => {
     it('marks a device offline on an "Offline" payload and logs it', async () => {
       const device = await createDevice({ status: 'online', lastSeen: new Date() });
-      await handleStatusTopic(device.owner.toString(), device.identifier, Buffer.from('Offline'));
+      await handleStatusTopic(device.household.toString(), device.identifier, Buffer.from('Offline'));
 
       const updated = await Device.findById(device._id);
       expect(updated.status).toBe('offline');
@@ -127,7 +129,7 @@ describe('mqttSubscriber', () => {
       const device = await createDevice({ status: 'offline' });
       const before = device.lastSeen;
 
-      await handleStatusTopic(device.owner.toString(), device.identifier, Buffer.from('online'));
+      await handleStatusTopic(device.household.toString(), device.identifier, Buffer.from('online'));
 
       const updated = await Device.findById(device._id);
       expect(updated.status).toBe('online');
@@ -139,7 +141,7 @@ describe('mqttSubscriber', () => {
 
     it('ignores an unrecognized status payload', async () => {
       const device = await createDevice({ status: 'online' });
-      await handleStatusTopic(device.owner.toString(), device.identifier, Buffer.from('lol what'));
+      await handleStatusTopic(device.household.toString(), device.identifier, Buffer.from('lol what'));
 
       const updated = await Device.findById(device._id);
       expect(updated.status).toBe('online'); // unchanged
@@ -149,19 +151,19 @@ describe('mqttSubscriber', () => {
 
   describe('handleNormalizedTopic', () => {
     it('re-broadcasts the payload to Socket.IO without touching the DB', async () => {
-      const ownerId = new mongoose.Types.ObjectId().toString();
+      const householdId = new mongoose.Types.ObjectId().toString();
       const deviceId = new mongoose.Types.ObjectId().toString();
       const payload = Buffer.from(JSON.stringify({ power: 'on' }));
 
-      await handleNormalizedTopic(ownerId, deviceId, payload);
+      await handleNormalizedTopic(householdId, deviceId, payload);
 
-      expect(emitDeviceEvent).toHaveBeenCalledWith(ownerId, { deviceId, state: { power: 'on' } });
+      expect(emitDeviceEvent).toHaveBeenCalledWith(householdId, { deviceId, state: { power: 'on' } });
       expect(await EventLog.countDocuments()).toBe(0);
     });
 
     it('drops malformed JSON without throwing', async () => {
       await expect(
-        handleNormalizedTopic('owner-1', 'device-1', Buffer.from('not json'))
+        handleNormalizedTopic('household-1', 'device-1', Buffer.from('not json'))
       ).resolves.toBeUndefined();
       expect(emitDeviceEvent).not.toHaveBeenCalled();
     });
@@ -171,7 +173,7 @@ describe('mqttSubscriber', () => {
     it('routes a /state topic to handleStateTopic', async () => {
       const device = await createDevice();
       await handleIncomingMessage(
-        `home/${device.owner}/${device.identifier}/state`,
+        `home/${device.household}/${device.identifier}/state`,
         Buffer.from(JSON.stringify({ POWER: 'ON' }))
       );
       const updated = await Device.findById(device._id);
@@ -180,15 +182,15 @@ describe('mqttSubscriber', () => {
 
     it('routes a /status topic to handleStatusTopic', async () => {
       const device = await createDevice({ status: 'online' });
-      await handleIncomingMessage(`home/${device.owner}/${device.identifier}/status`, Buffer.from('Offline'));
+      await handleIncomingMessage(`home/${device.household}/${device.identifier}/status`, Buffer.from('Offline'));
       const updated = await Device.findById(device._id);
       expect(updated.status).toBe('offline');
     });
 
     it('routes a /normalized topic to handleNormalizedTopic', async () => {
-      const ownerId = new mongoose.Types.ObjectId().toString();
-      await handleIncomingMessage(`home/${ownerId}/someDeviceId/normalized`, Buffer.from(JSON.stringify({ motion: 'detected' })));
-      expect(emitDeviceEvent).toHaveBeenCalledWith(ownerId, { deviceId: 'someDeviceId', state: { motion: 'detected' } });
+      const householdId = new mongoose.Types.ObjectId().toString();
+      await handleIncomingMessage(`home/${householdId}/someDeviceId/normalized`, Buffer.from(JSON.stringify({ motion: 'detected' })));
+      expect(emitDeviceEvent).toHaveBeenCalledWith(householdId, { deviceId: 'someDeviceId', state: { motion: 'detected' } });
     });
 
     it('silently ignores an unrecognized topic shape', async () => {

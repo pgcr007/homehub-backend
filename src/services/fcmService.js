@@ -58,10 +58,9 @@ function getStaleTokens(tokens, result) {
 }
 
 /**
- * Looks up a user's tokens, sends, and prunes stale tokens in one call —
- * the exact sequence app.js's /health/fcm-test route already does by hand.
- * Added for Phase 5's rule engine `notify` action, but generic enough for
- * any future caller that just wants "push this user a notification."
+ * Looks up a single user's tokens, sends, and prunes stale tokens in one
+ * call. Kept around for /health/fcm-test and anywhere else that genuinely
+ * means "push this one specific user."
  */
 async function sendToUser(userId, notification) {
   const User = require('../models/User');
@@ -78,4 +77,56 @@ async function sendToUser(userId, notification) {
   return result;
 }
 
-module.exports = { initFirebase, sendToTokens, getStaleTokens, sendToUser };
+/**
+ * Phase 6: the rules engine's `notify` action pushes to every member of a
+ * household, not just one user — a property manager and a tenant sharing a
+ * unit should both hear about a rule firing in their space. Gathers all
+ * member tokens into one multicast send (rather than one send per member)
+ * so a household with several members doesn't multiply FCM calls, then
+ * prunes stale tokens per-user same as sendToUser.
+ */
+async function sendToHousehold(householdId, notification) {
+  const Household = require('../models/Household');
+  const User = require('../models/User');
+
+  const household = await Household.findById(householdId);
+  if (!household) return null;
+
+  const memberIds = household.members.map((m) => m.user);
+  const users = await User.find({ _id: { $in: memberIds }, fcmTokens: { $exists: true, $ne: [] } });
+  if (!users.length) return null;
+
+  const tokenToUser = new Map();
+  const allTokens = [];
+  for (const user of users) {
+    for (const token of user.fcmTokens) {
+      tokenToUser.set(token, user._id);
+      allTokens.push(token);
+    }
+  }
+  if (!allTokens.length) return null;
+
+  const result = await sendToTokens(allTokens, notification);
+  const staleTokens = getStaleTokens(allTokens, result);
+
+  if (staleTokens.length) {
+    // Group stale tokens back by the user they belong to so each user's
+    // fcmTokens array only gets the tokens that are actually theirs pulled.
+    const staleByUser = new Map();
+    for (const token of staleTokens) {
+      const userId = tokenToUser.get(token)?.toString();
+      if (!userId) continue;
+      if (!staleByUser.has(userId)) staleByUser.set(userId, []);
+      staleByUser.get(userId).push(token);
+    }
+    await Promise.all(
+      Array.from(staleByUser.entries()).map(([userId, tokens]) =>
+        User.findByIdAndUpdate(userId, { $pullAll: { fcmTokens: tokens } })
+      )
+    );
+  }
+
+  return result;
+}
+
+module.exports = { initFirebase, sendToTokens, getStaleTokens, sendToUser, sendToHousehold };

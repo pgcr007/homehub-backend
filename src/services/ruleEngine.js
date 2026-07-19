@@ -3,11 +3,11 @@ const Device = require('../models/Device');
 const Rule = require('../models/Rule');
 const EventLog = require('../models/EventLog');
 const { publishCommand } = require('./mqttService');
-const { sendToUser } = require('./fcmService');
+const { sendToHousehold } = require('./fcmService');
 
 /**
- * Phase 5: evaluates enabled rules against incoming device state changes and
- * fires their actions.
+ * Evaluates enabled rules against incoming device state changes and fires
+ * their actions.
  *
  * The hard part isn't matching triggers — it's loop protection. A rule's
  * `device_command` action publishes to MQTT and returns immediately; nothing
@@ -114,8 +114,11 @@ async function executeActions(rule, chainId, chainDepth) {
         console.warn(`[rules] rule ${rule._id} failed to publish command: ${err.message}`);
       }
     } else if (action.type === 'notify') {
+      // Phase 6: notify the whole household, not just the rule's creator —
+      // a property manager and a tenant sharing a unit should both hear
+      // about a rule firing in their space.
       try {
-        await sendToUser(rule.owner, {
+        await sendToHousehold(rule.household, {
           title: 'HomeHub',
           body: action.message || `Rule "${rule.name}" fired`,
         });
@@ -142,7 +145,7 @@ async function executeActions(rule, chainId, chainDepth) {
  */
 async function evaluateRulesForEvent({ device, normalizedState, previousState, chainId = null, chainDepth = 0 }) {
   const rules = await Rule.find({
-    owner: device.owner,
+    household: device.household,
     enabled: true,
     'trigger.device': device._id,
   });
@@ -158,7 +161,7 @@ async function evaluateRulesForEvent({ device, normalizedState, previousState, c
     if (chainDepth > 0 && chainDepth >= rule.maxChainDepth) {
       await EventLog.create({
         device: device._id,
-        owner: device.owner,
+        household: device.household,
         source: 'rule',
         type: 'rule_blocked',
         normalizedState: { ruleId: rule._id, ruleName: rule.name, reason: 'max_chain_depth_exceeded' },
@@ -177,7 +180,7 @@ async function evaluateRulesForEvent({ device, normalizedState, previousState, c
 
     await EventLog.create({
       device: device._id,
-      owner: device.owner,
+      household: device.household,
       source: 'rule',
       type: 'rule_fired',
       normalizedState: { ruleId: rule._id, ruleName: rule.name, actionsCount: rule.actions.length },
@@ -205,9 +208,9 @@ async function evaluateRulesForEvent({ device, normalizedState, previousState, c
  * opposing actions is a mistake or intentional (e.g. rules gated by
  * different, mutually-exclusive conditions).
  */
-async function findConflictingRules(candidateRule, ownerId, excludeRuleId = null) {
+async function findConflictingRules(candidateRule, householdId, excludeRuleId = null) {
   const query = {
-    owner: ownerId,
+    household: householdId,
     enabled: true,
     'trigger.device': candidateRule.trigger.device,
     'trigger.capability': candidateRule.trigger.capability,

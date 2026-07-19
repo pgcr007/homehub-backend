@@ -10,9 +10,13 @@ const { evaluateRulesForEvent, consumePendingChain } = require('../services/rule
  *
  * Public endpoint (no user JWT — vendors can't get one) secured instead by a
  * per-device HMAC signature in the X-HomeHub-Signature header, computed over
- * the raw request body. This is the "most likely abuse target" the security
- * checklist calls out, so: raw-body signature check happens before any JSON
+ * the raw request body. Raw-body signature check happens before any JSON
  * parsing or DB work, and a dedicated rate limiter (see app.js) applies here.
+ *
+ * Note: the webhook secret is still derived from the Device's Mongo _id
+ * alone (not householdId+deviceId) — that's unchanged in Phase 6. _id is
+ * already globally unique and immutable, so folding householdId into the
+ * derivation wouldn't add any real security, just extra complexity.
  */
 async function handleWebhookEvent(req, res) {
   const { deviceId } = req.params;
@@ -64,7 +68,7 @@ async function handleWebhookEvent(req, res) {
 
     await EventLog.create({
       device: device._id,
-      owner: device.owner,
+      household: device.household,
       source: 'webhook',
       type: 'state_change',
       normalizedState,

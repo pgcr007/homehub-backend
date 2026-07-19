@@ -5,9 +5,9 @@ const { publishCommand } = require('../services/mqttService');
 
 const { DEVICE_TYPES, DEVICE_TYPE_NAMES } = Device;
 
-async function assertRoomOwnership(roomId, ownerId) {
+async function assertRoomInHousehold(roomId, householdId) {
   if (!roomId) return null;
-  const room = await Room.findOne({ _id: roomId, owner: ownerId });
+  const room = await Room.findOne({ _id: roomId, household: householdId });
   if (!room) {
     const err = new Error('room not found');
     err.status = 400;
@@ -20,7 +20,7 @@ async function assertRoomOwnership(roomId, ownerId) {
  * POST /api/devices
  * body: { name, type, identifier, room? }
  * `identifier` is the human-facing label used in MQTT topics for MQTT-protocol
- * devices (e.g. the {deviceId} segment of home/{ownerId}/{deviceId}/state).
+ * devices (e.g. the {deviceId} segment of home/{householdId}/{deviceId}/state).
  * For webhook-protocol devices it's just a label — the actual webhook secret
  * is keyed off the Device's _id, returned once in this response.
  */
@@ -40,12 +40,13 @@ async function createDevice(req, res) {
       return res.status(400).json({ error: 'identifier is required' });
     }
 
-    const roomId = await assertRoomOwnership(room, req.userId);
+    const roomId = await assertRoomInHousehold(room, req.householdId);
     const protocol = DEVICE_TYPES[type].protocol;
 
     const device = await Device.create({
       name: name.trim(),
-      owner: req.userId,
+      household: req.householdId,
+      createdBy: req.userId,
       room: roomId,
       type,
       protocol,
@@ -76,7 +77,7 @@ async function createDevice(req, res) {
 
 /** GET /api/devices?room=<roomId> */
 async function listDevices(req, res) {
-  const filter = { owner: req.userId };
+  const filter = { household: req.householdId };
   if (req.query.room) filter.room = req.query.room;
 
   const devices = await Device.find(filter).sort({ createdAt: -1 });
@@ -84,7 +85,7 @@ async function listDevices(req, res) {
 }
 
 async function getDevice(req, res) {
-  const device = await Device.findOne({ _id: req.params.id, owner: req.userId });
+  const device = await Device.findOne({ _id: req.params.id, household: req.householdId });
   if (!device) return res.status(404).json({ error: 'device not found' });
   return res.json({ device });
 }
@@ -98,7 +99,7 @@ async function getDevice(req, res) {
  */
 async function sendCommand(req, res) {
   try {
-    const device = await Device.findOne({ _id: req.params.id, owner: req.userId });
+    const device = await Device.findOne({ _id: req.params.id, household: req.householdId });
     if (!device) return res.status(404).json({ error: 'device not found' });
 
     if (device.protocol !== 'mqtt') {
@@ -118,14 +119,13 @@ async function sendCommand(req, res) {
   }
 }
 
-
 /**
  * GET /api/devices/:id/webhook-secret
  * Separate from the main device payload so the secret isn't echoed back on
  * every ordinary list/get call — only fetched when actually needed.
  */
 async function getWebhookSecret(req, res) {
-  const device = await Device.findOne({ _id: req.params.id, owner: req.userId });
+  const device = await Device.findOne({ _id: req.params.id, household: req.householdId });
   if (!device) return res.status(404).json({ error: 'device not found' });
   if (device.protocol !== 'webhook') {
     return res.status(400).json({ error: 'device does not use the webhook protocol' });
@@ -144,7 +144,7 @@ async function getWebhookSecret(req, res) {
  */
 async function updateDevice(req, res) {
   try {
-    const device = await Device.findOne({ _id: req.params.id, owner: req.userId });
+    const device = await Device.findOne({ _id: req.params.id, household: req.householdId });
     if (!device) return res.status(404).json({ error: 'device not found' });
 
     const { name, room } = req.body;
@@ -155,7 +155,7 @@ async function updateDevice(req, res) {
     }
 
     if (room !== undefined) {
-      device.room = room === null ? null : await assertRoomOwnership(room, req.userId);
+      device.room = room === null ? null : await assertRoomInHousehold(room, req.householdId);
     }
 
     await device.save();
@@ -168,7 +168,7 @@ async function updateDevice(req, res) {
 }
 
 async function deleteDevice(req, res) {
-  const device = await Device.findOneAndDelete({ _id: req.params.id, owner: req.userId });
+  const device = await Device.findOneAndDelete({ _id: req.params.id, household: req.householdId });
   if (!device) return res.status(404).json({ error: 'device not found' });
   return res.json({ status: 'deleted' });
 }

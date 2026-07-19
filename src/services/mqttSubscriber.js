@@ -3,22 +3,20 @@ const EventLog = require('../models/EventLog');
 const { normalizeEvent } = require('./eventNormalizer');
 
 /**
- * This is the MQTT-side mirror of webhookController.js. Phase 2 built the
- * webhook-in path (device state -> normalize -> store -> log -> republish);
- * this module builds the identical pipeline for native-MQTT devices, so both
- * integration paths converge on exactly the same DB writes and exactly the
- * same `home/{ownerId}/{deviceId}/normalized` republish that Phase 3's
- * Socket.IO bridge and Phase 5's rule engine both consume.
+ * This is the MQTT-side mirror of webhookController.js. The webhook-in path
+ * (device state -> normalize -> store -> log -> republish) and this module's
+ * native-MQTT path converge on exactly the same DB writes and exactly the
+ * same `home/{householdId}/{deviceId}/normalized` republish that the
+ * Socket.IO bridge and the rule engine both consume.
  *
  * Three topic shapes are handled, matching docs/DEVICE_SHORTLIST.md's
- * `home/{householdId}/{deviceId}/...` convention (householdId = owner's
- * User._id until Phase 6 introduces a real household model; {deviceId} here
- * is the device's `identifier` field, NOT its Mongo _id — identifier is
- * what's actually configured on the physical device/firmware):
+ * `home/{householdId}/{deviceId}/...` convention ({deviceId} in the state/
+ * status topics is the device's `identifier` field, NOT its Mongo _id —
+ * identifier is what's actually configured on the physical device/firmware):
  *
- *   home/{ownerId}/{identifier}/state       - raw device payload (Tasmota/ESPHome)
- *   home/{ownerId}/{identifier}/status      - Last Will and Testament: "Online"/"Offline"
- *   home/{ownerId}/{deviceId}/normalized     - our own republished output (deviceId = _id here);
+ *   home/{householdId}/{identifier}/state       - raw device payload (Tasmota/ESPHome)
+ *   home/{householdId}/{identifier}/status      - Last Will and Testament: "Online"/"Offline"
+ *   home/{householdId}/{deviceId}/normalized     - our own republished output (deviceId = _id here);
  *                                              re-broadcast to Socket.IO clients, not re-normalized
  */
 
@@ -26,25 +24,25 @@ const STATE_TOPIC_RE = /^home\/([^/]+)\/([^/]+)\/state$/;
 const STATUS_TOPIC_RE = /^home\/([^/]+)\/([^/]+)\/status$/;
 const NORMALIZED_TOPIC_RE = /^home\/([^/]+)\/([^/]+)\/normalized$/;
 
-/** Looks up a device by owner+identifier, the same compound-unique key used at registration. */
-async function findDeviceByIdentifier(ownerId, identifier) {
+/** Looks up a device by household+identifier, the same compound-unique key used at registration. */
+async function findDeviceByIdentifier(householdId, identifier) {
   try {
-    return await Device.findOne({ owner: ownerId, identifier });
+    return await Device.findOne({ household: householdId, identifier });
   } catch (err) {
-    // Malformed ownerId (not a valid ObjectId) — treat as "no such device", don't crash the subscriber.
-    console.warn(`[mqtt] device lookup failed for owner=${ownerId} identifier=${identifier}: ${err.message}`);
+    // Malformed householdId (not a valid ObjectId) — treat as "no such device", don't crash the subscriber.
+    console.warn(`[mqtt] device lookup failed for household=${householdId} identifier=${identifier}: ${err.message}`);
     return null;
   }
 }
 
 /**
- * Handles a raw device-state message: home/{ownerId}/{identifier}/state
+ * Handles a raw device-state message: home/{householdId}/{identifier}/state
  * Mirrors handleWebhookEvent's state-write logic exactly, source tagged 'mqtt' instead of 'webhook'.
  */
-async function handleStateTopic(ownerId, identifier, payloadBuffer) {
-  const device = await findDeviceByIdentifier(ownerId, identifier);
+async function handleStateTopic(householdId, identifier, payloadBuffer) {
+  const device = await findDeviceByIdentifier(householdId, identifier);
   if (!device) {
-    console.warn(`[mqtt] no device registered for owner=${ownerId} identifier=${identifier}, dropping message`);
+    console.warn(`[mqtt] no device registered for household=${householdId} identifier=${identifier}, dropping message`);
     return;
   }
   if (device.protocol !== 'mqtt') {
@@ -66,8 +64,7 @@ async function handleStateTopic(ownerId, identifier, payloadBuffer) {
   } catch (err) {
     // Bad/unexpected payload shape — log and move on. Unlike the webhook endpoint (which can
     // return 422 to a caller), there's no request/response here to reject; the device just
-    // gets no state update this cycle. This is exactly the "topic-naming and payload-shape
-    // assumptions get proven wrong" risk the plan calls out for real-device testing.
+    // gets no state update this cycle.
     console.warn(`[mqtt] normalization failed for device ${device._id}: ${err.message}`);
     return;
   }
@@ -76,10 +73,10 @@ async function handleStateTopic(ownerId, identifier, payloadBuffer) {
   // and the EventLog entry both have a true before/after to compare against.
   const previousState = { ...device.state };
 
-  // Phase 5: was this event caused by a rule's device_command action
-  // (published to this same device moments ago), or is it organic? Consumed
-  // now so both the EventLog entry and the rule evaluation below agree on
-  // the same chain context.
+  // Was this event caused by a rule's device_command action (published to
+  // this same device moments ago), or is it organic? Consumed now so both
+  // the EventLog entry and the rule evaluation below agree on the same
+  // chain context.
   const { evaluateRulesForEvent, consumePendingChain } = require('./ruleEngine');
   const { chainId, chainDepth } = consumePendingChain(device._id);
 
@@ -90,7 +87,7 @@ async function handleStateTopic(ownerId, identifier, payloadBuffer) {
 
   await EventLog.create({
     device: device._id,
-    owner: device.owner,
+    household: device.household,
     source: 'mqtt',
     type: 'state_change',
     normalizedState,
@@ -111,15 +108,15 @@ async function handleStateTopic(ownerId, identifier, payloadBuffer) {
 }
 
 /**
- * Handles a Last Will and Testament / heartbeat message: home/{ownerId}/{identifier}/status
+ * Handles a Last Will and Testament / heartbeat message: home/{householdId}/{identifier}/status
  * Broker-delivered LWT payloads are conventionally "Online"/"Offline" (Tasmota's tele/LWT
  * default); we accept a few case-insensitive variants so ESPHome's availability payloads
  * ("online"/"offline") work the same way without a separate code path.
  */
-async function handleStatusTopic(ownerId, identifier, payloadBuffer) {
-  const device = await findDeviceByIdentifier(ownerId, identifier);
+async function handleStatusTopic(householdId, identifier, payloadBuffer) {
+  const device = await findDeviceByIdentifier(householdId, identifier);
   if (!device) {
-    console.warn(`[mqtt] no device registered for owner=${ownerId} identifier=${identifier}, dropping status message`);
+    console.warn(`[mqtt] no device registered for household=${householdId} identifier=${identifier}, dropping status message`);
     return;
   }
 
@@ -139,7 +136,7 @@ async function handleStatusTopic(ownerId, identifier, payloadBuffer) {
 
   await EventLog.create({
     device: device._id,
-    owner: device.owner,
+    household: device.household,
     source: 'mqtt',
     type: isOnline ? 'online' : 'offline',
     normalizedState: {},
@@ -149,16 +146,16 @@ async function handleStatusTopic(ownerId, identifier, payloadBuffer) {
   // Push the status flip live too, not just capability state — same lazy
   // require as publishNormalizedEvent above, same circular-import reason.
   const { emitDeviceEvent } = require('./socketService');
-  emitDeviceEvent(device.owner.toString(), { deviceId: device._id.toString(), status: device.status });
+  emitDeviceEvent(device.household.toString(), { deviceId: device._id.toString(), status: device.status });
 }
 
 /**
- * Handles our own republished normalized events: home/{ownerId}/{deviceId}/normalized
+ * Handles our own republished normalized events: home/{householdId}/{deviceId}/normalized
  * These already went through normalizeEvent (via the webhook path or handleStateTopic above),
- * so this is a pure re-broadcast to any Socket.IO clients subscribed for that owner — no DB
- * writes here, this topic is purely the fan-out point for Phase 3's live-state push.
+ * so this is a pure re-broadcast to any Socket.IO clients subscribed for that household — no DB
+ * writes here, this topic is purely the fan-out point for the live-state push.
  */
-async function handleNormalizedTopic(ownerId, deviceId, payloadBuffer) {
+async function handleNormalizedTopic(householdId, deviceId, payloadBuffer) {
   let normalizedState;
   try {
     normalizedState = JSON.parse(payloadBuffer.toString('utf8'));
@@ -168,7 +165,7 @@ async function handleNormalizedTopic(ownerId, deviceId, payloadBuffer) {
   }
 
   const { emitDeviceEvent } = require('./socketService');
-  emitDeviceEvent(ownerId, { deviceId, state: normalizedState });
+  emitDeviceEvent(householdId, { deviceId, state: normalizedState });
 }
 
 /**

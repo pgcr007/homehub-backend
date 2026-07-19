@@ -11,13 +11,13 @@ function badRequest(message) {
   return err;
 }
 
-/** Same ownership-check pattern as assertRoomOwnership in deviceController,
- * just applied everywhere a rule can reference a device — trigger,
- * conditions, and device_command action targets can each be a different
- * device, so this gets called several times per rule. */
-async function assertDeviceOwnership(deviceId, ownerId) {
+/** Same household-scoping pattern as assertRoomInHousehold in
+ * deviceController, just applied everywhere a rule can reference a device —
+ * trigger, conditions, and device_command action targets can each be a
+ * different device, so this gets called several times per rule. */
+async function assertDeviceInHousehold(deviceId, householdId) {
   if (!deviceId) throw badRequest('device is required');
-  const device = await Device.findOne({ _id: deviceId, owner: ownerId });
+  const device = await Device.findOne({ _id: deviceId, household: householdId });
   if (!device) throw badRequest(`device ${deviceId} not found`);
   return device;
 }
@@ -35,9 +35,9 @@ function validateClauseShape(clause, label) {
   }
 }
 
-async function buildClause(raw, ownerId, label) {
+async function buildClause(raw, householdId, label) {
   validateClauseShape(raw, label);
-  const device = await assertDeviceOwnership(raw.device, ownerId);
+  const device = await assertDeviceInHousehold(raw.device, householdId);
   return {
     device: device._id,
     capability: raw.capability,
@@ -46,13 +46,13 @@ async function buildClause(raw, ownerId, label) {
   };
 }
 
-async function buildAction(raw, ownerId, index) {
+async function buildAction(raw, householdId, index) {
   if (!raw || !ACTION_TYPES.includes(raw.type)) {
     throw badRequest(`actions[${index}].type must be one of: ${ACTION_TYPES.join(', ')}`);
   }
 
   if (raw.type === 'device_command') {
-    const device = await assertDeviceOwnership(raw.device, ownerId);
+    const device = await assertDeviceInHousehold(raw.device, householdId);
     if (!raw.capability) throw badRequest(`actions[${index}].capability is required for device_command`);
     if (raw.value === undefined) throw badRequest(`actions[${index}].value is required for device_command`);
     return { type: 'device_command', device: device._id, capability: raw.capability, value: raw.value };
@@ -81,21 +81,22 @@ async function createRule(req, res) {
       return res.status(400).json({ error: 'at least one action is required' });
     }
 
-    const builtTrigger = await buildClause(trigger, req.userId, 'trigger');
+    const builtTrigger = await buildClause(trigger, req.householdId, 'trigger');
 
     const builtConditions = [];
     for (const c of conditions) {
-      builtConditions.push(await buildClause(c, req.userId, 'conditions[]'));
+      builtConditions.push(await buildClause(c, req.householdId, 'conditions[]'));
     }
 
     const builtActions = [];
     for (let i = 0; i < actions.length; i++) {
-      builtActions.push(await buildAction(actions[i], req.userId, i));
+      builtActions.push(await buildAction(actions[i], req.householdId, i));
     }
 
     const rule = await Rule.create({
       name: name.trim(),
-      owner: req.userId,
+      household: req.householdId,
+      createdBy: req.userId,
       enabled: enabled === undefined ? true : Boolean(enabled),
       trigger: builtTrigger,
       conditions: builtConditions,
@@ -114,7 +115,7 @@ async function createRule(req, res) {
 
     const response = { rule };
     if (rule.enabled) {
-      const conflicts = await findConflictingRules(rule, req.userId, rule._id);
+      const conflicts = await findConflictingRules(rule, req.householdId, rule._id);
       if (conflicts.length) {
         response.warnings = conflicts.map(
           (c) => `Conflicts with rule "${c.ruleName}" (${c.ruleId}): ${c.reason}`
@@ -130,10 +131,10 @@ async function createRule(req, res) {
   }
 }
 
-/** GET /api/rules — caller's rules, most-recently-created first. */
+/** GET /api/rules — household's rules, most-recently-created first. */
 async function listRules(req, res) {
   try {
-    const rules = await Rule.find({ owner: req.userId })
+    const rules = await Rule.find({ household: req.householdId })
       .sort({ createdAt: -1 })
       .populate('trigger.device', 'name type')
       .populate('conditions.device', 'name type')
@@ -158,7 +159,7 @@ async function toggleRule(req, res) {
       return res.status(400).json({ error: 'enabled must be a boolean' });
     }
     const rule = await Rule.findOneAndUpdate(
-      { _id: req.params.id, owner: req.userId },
+      { _id: req.params.id, household: req.householdId },
       { enabled },
       { new: true }
     );
@@ -172,7 +173,7 @@ async function toggleRule(req, res) {
 
     const response = { rule };
     if (rule.enabled) {
-      const conflicts = await findConflictingRules(rule, req.userId, rule._id);
+      const conflicts = await findConflictingRules(rule, req.householdId, rule._id);
       if (conflicts.length) {
         response.warnings = conflicts.map(
           (c) => `Conflicts with rule "${c.ruleName}" (${c.ruleId}): ${c.reason}`
@@ -189,7 +190,7 @@ async function toggleRule(req, res) {
 
 async function deleteRule(req, res) {
   try {
-    const rule = await Rule.findOneAndDelete({ _id: req.params.id, owner: req.userId });
+    const rule = await Rule.findOneAndDelete({ _id: req.params.id, household: req.householdId });
     if (!rule) return res.status(404).json({ error: 'rule not found' });
     return res.json({ status: 'deleted' });
   } catch (err) {

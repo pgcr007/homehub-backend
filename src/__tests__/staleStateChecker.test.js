@@ -10,7 +10,8 @@ const { checkStaleDevices, getStaleThresholdMs } = require('../services/staleSta
 async function createDevice(overrides = {}) {
   return Device.create({
     name: 'Test Sensor',
-    owner: new mongoose.Types.ObjectId(),
+    household: new mongoose.Types.ObjectId(),
+    createdBy: new mongoose.Types.ObjectId(),
     type: 'esphome_motion_sensor',
     protocol: 'mqtt',
     identifier: 'motion-1',
@@ -45,6 +46,7 @@ describe('staleStateChecker', () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('unknown');
     expect(events[0].source).toBe('mqtt');
+    expect(events[0].household.toString()).toBe(device.household.toString());
   });
 
   it('leaves an online device with a recent lastSeen untouched', async () => {

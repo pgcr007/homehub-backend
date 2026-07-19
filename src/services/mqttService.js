@@ -80,7 +80,7 @@ function publishNormalizedEvent(device, normalizedState) {
     console.warn('[mqtt] not connected, skipping republish of normalized event');
     return;
   }
-  const topic = `home/${device.owner}/${device._id}/normalized`;
+  const topic = `home/${device.household}/${device._id}/normalized`;
   client.publish(topic, JSON.stringify(normalizedState), { retain: true });
 }
 
@@ -88,7 +88,7 @@ function publishCommand(device, command) {
   if (!client || !client.connected) {
     throw new Error('MQTT client is not connected, cannot send command');
   }
-  const topic = `home/${device.owner}/${device.identifier}/cmd`;
+  const topic = `home/${device.household}/${device.identifier}/cmd`;
   client.publish(topic, JSON.stringify(command));
   return topic;
 }

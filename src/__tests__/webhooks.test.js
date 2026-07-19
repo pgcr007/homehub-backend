@@ -1,7 +1,7 @@
 const request = require('supertest');
-const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const { connectTestDB, clearTestDB, disconnectTestDB } = require('../testUtils/testDb');
+const { createAuthedHousehold } = require('../testUtils/authHelpers');
 const { computeSignature } = require('../services/webhookAuth');
 const EventLog = require('../models/EventLog');
 
@@ -10,14 +10,10 @@ process.env.WEBHOOK_SIGNING_SECRET = process.env.WEBHOOK_SIGNING_SECRET || 'test
 
 const app = require('../app');
 
-function tokenFor(userId) {
-  return jwt.sign({ sub: userId }, process.env.JWT_SECRET);
-}
-
 async function createThermostat(auth) {
   const res = await request(app)
     .post('/api/devices')
-    .set(auth)
+    .set(auth.headers)
     .send({ name: 'Thermostat', type: 'webhook_thermostat', identifier: 'thermo-1' });
   return res.body.device;
 }
@@ -26,8 +22,8 @@ describe('Webhook ingestion API', () => {
   let auth;
 
   beforeAll(async () => {
-  await connectTestDB();
-}, 30000); // first run downloads a real mongod binary — can exceed Jest's 5s default
+    await connectTestDB();
+  }, 30000); // first run downloads a real mongod binary — can exceed Jest's 5s default
 
   afterAll(async () => {
     await disconnectTestDB();
@@ -35,8 +31,12 @@ describe('Webhook ingestion API', () => {
 
   beforeEach(async () => {
     await clearTestDB();
-    auth = { Authorization: `Bearer ${tokenFor(new mongoose.Types.ObjectId().toString())}` };
+    auth = await createAuthedHousehold();
   });
+
+  // The webhook endpoint itself is unauthenticated (vendors can't hold a JWT) — it's secured by
+  // the per-device HMAC signature instead, so these tests never attach auth.headers to the
+  // /api/webhooks/:deviceId calls, only to the /api/devices setup calls.
 
   it('rejects a request with no signature', async () => {
     const device = await createThermostat(auth);
@@ -45,7 +45,7 @@ describe('Webhook ingestion API', () => {
     const res = await request(app)
       .post(`/api/webhooks/${device._id}`)
       .set('Content-Type', 'application/json')
-      .send(body.toString('utf8'))
+      .send(body);
 
     expect(res.status).toBe(401);
   });
@@ -59,7 +59,7 @@ describe('Webhook ingestion API', () => {
       .post(`/api/webhooks/${device._id}`)
       .set('Content-Type', 'application/json')
       .set('X-HomeHub-Signature', badSignature)
-      .send(body.toString('utf8'))
+      .send(body.toString('utf8'));
 
     expect(res.status).toBe(401);
   });
@@ -73,12 +73,12 @@ describe('Webhook ingestion API', () => {
       .post(`/api/webhooks/${device._id}`)
       .set('Content-Type', 'application/json')
       .set('X-HomeHub-Signature', signature)
-      .send(body.toString('utf8'))
+      .send(body.toString('utf8'));
 
     expect(res.status).toBe(200);
     expect(res.body.state).toEqual({ temperature: 21.5, targetTemperature: 22, mode: 'heat' });
 
-    const getDevice = await request(app).get(`/api/devices/${device._id}`).set(auth);
+    const getDevice = await request(app).get(`/api/devices/${device._id}`).set(auth.headers);
     expect(getDevice.body.device.status).toBe('online');
     expect(getDevice.body.device.state.temperature).toBe(21.5);
 
@@ -86,6 +86,7 @@ describe('Webhook ingestion API', () => {
     expect(events).toHaveLength(1);
     expect(events[0].source).toBe('webhook');
     expect(events[0].normalizedState.mode).toBe('heat');
+    expect(events[0].household.toString()).toBe(auth.householdId);
   });
 
   it('rejects a payload that fails normalization with 422, not 500', async () => {
@@ -97,7 +98,7 @@ describe('Webhook ingestion API', () => {
       .post(`/api/webhooks/${device._id}`)
       .set('Content-Type', 'application/json')
       .set('X-HomeHub-Signature', signature)
-      .send(body.toString('utf8'))
+      .send(body.toString('utf8'));
 
     expect(res.status).toBe(422);
   });
@@ -105,7 +106,7 @@ describe('Webhook ingestion API', () => {
   it('rejects a non-webhook-protocol device', async () => {
     const create = await request(app)
       .post('/api/devices')
-      .set(auth)
+      .set(auth.headers)
       .send({ name: 'Plug', type: 'tasmota_plug', identifier: 'plug-1' });
     const device = create.body.device;
 
@@ -116,7 +117,7 @@ describe('Webhook ingestion API', () => {
       .post(`/api/webhooks/${device._id}`)
       .set('Content-Type', 'application/json')
       .set('X-HomeHub-Signature', signature)
-      .send(body.toString('utf8'))
+      .send(body.toString('utf8'));
 
     expect(res.status).toBe(400);
   });
@@ -130,7 +131,7 @@ describe('Webhook ingestion API', () => {
       .post(`/api/webhooks/${fakeId}`)
       .set('Content-Type', 'application/json')
       .set('X-HomeHub-Signature', signature)
-      .send(body.toString('utf8'))
+      .send(body.toString('utf8'));
 
     expect(res.status).toBe(404);
   });

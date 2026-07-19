@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 // Locked shortlist — see docs/DEVICE_SHORTLIST.md. Each entry records its
 // integration protocol and the capability keys it's allowed to report/accept,
-// so both the normalization layer and the (future) rule builder can validate
-// against a single source of truth instead of duplicating this knowledge.
+// so both the normalization layer and the rule builder can validate against
+// a single source of truth instead of duplicating this knowledge.
 const DEVICE_TYPES = {
   tasmota_plug: { protocol: 'mqtt', capabilities: ['power'] },
   tasmota_bulb: { protocol: 'mqtt', capabilities: ['power', 'brightness'] },
@@ -24,7 +24,18 @@ const deviceSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    owner: {
+    // Phase 6: devices belong to a household (multi-tenant unit), not a
+    // single owner. This is also the {householdId} segment of every MQTT
+    // topic (home/{householdId}/{identifier}/...), replacing the old
+    // ownerId-as-namespace placeholder.
+    household: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Household',
+      required: true,
+    },
+    // Audit trail only — who registered this device. Not used for access
+    // control; that's entirely household-membership-based now.
+    createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true,
@@ -48,8 +59,8 @@ const deviceSchema = new mongoose.Schema(
     },
     // MQTT devices: the {deviceId} segment of home/{householdId}/{deviceId}/...
     // Webhook devices: the {deviceId} segment of /api/webhooks/:deviceId.
-    // Either way, this is what's used to derive/verify that device's signing
-    // secret and to route inbound events to the right Device doc.
+    // Either way, this is what's used to route inbound events to the right
+    // Device doc.
     identifier: {
       type: String,
       required: true,
@@ -62,9 +73,8 @@ const deviceSchema = new mongoose.Schema(
       },
     },
     // Free-form last-known-state bag, keyed by capability (e.g. { power: 'on',
-    // brightness: 80 }). Phase 3 will keep this current from the MQTT
-    // subscriber; the webhook path (built now) already keeps it current for
-    // webhook-protocol devices.
+    // brightness: 80 }). Kept current by the MQTT subscriber and the webhook
+    // controller.
     state: {
       type: mongoose.Schema.Types.Mixed,
       default: {},
@@ -82,8 +92,8 @@ const deviceSchema = new mongoose.Schema(
   { timestamps: true, minimize: false }
 );
 
-// A given owner can't register the same MQTT topic / webhook path twice.
-deviceSchema.index({ owner: 1, identifier: 1 }, { unique: true });
+// A given household can't register the same MQTT topic / webhook path twice.
+deviceSchema.index({ household: 1, identifier: 1 }, { unique: true });
 
 deviceSchema.statics.DEVICE_TYPES = DEVICE_TYPES;
 deviceSchema.statics.DEVICE_TYPE_NAMES = DEVICE_TYPE_NAMES;

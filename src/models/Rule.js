@@ -31,18 +31,24 @@ const actionSchema = new mongoose.Schema(
 const ruleSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
-    owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    // Phase 6: rules belong to a household (was a single owner). A 'notify'
+    // action now pushes to every member of the household, not just the
+    // creator — see fcmService.sendToHousehold.
+    household: { type: mongoose.Schema.Types.ObjectId, ref: 'Household', required: true },
+    // Audit trail only — who authored this rule. Not used for access control.
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     enabled: { type: Boolean, default: true },
     trigger: { type: clauseSchema, required: true },
-    // ANDed together — Phase 5 decides if OR groups are ever needed.
+    // ANDed together.
     conditions: { type: [clauseSchema], default: [] },
     actions: { type: [actionSchema], default: [] },
-    // Phase 5 loop-protection field, reserved now so the schema doesn't need
-    // a migration later: how many rule-triggered hops deep this rule is
+    // Loop-protection field: how many rule-triggered hops deep this rule is
     // allowed to fire from within, when triggered by another rule's action.
     maxChainDepth: { type: Number, default: 3 },
   },
   { timestamps: true }
 );
+
+ruleSchema.index({ household: 1 });
 
 module.exports = mongoose.model('Rule', ruleSchema);

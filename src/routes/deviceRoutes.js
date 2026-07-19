@@ -1,5 +1,6 @@
 const express = require('express');
 const requireAuth = require('../middleware/requireAuth');
+const requireHousehold = require('../middleware/requireHousehold');
 const {
   createDevice,
   listDevices,
@@ -13,6 +14,7 @@ const {
 const router = express.Router();
 
 router.use(requireAuth);
+router.use(requireHousehold);
 
 router.post('/', createDevice);
 router.get('/', listDevices);

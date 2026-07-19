@@ -7,18 +7,18 @@ const roomSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    // Scoped to a single user for now. Phase 6 will add a `household` ref
-    // alongside/instead of this, once multi-unit mode exists — see the
-    // open design question carried over from Phase 1.
-    owner: {
+    // Phase 6: scoped to a household (multi-member, role-aware) instead of a
+    // single owner user. Access control now flows through Household.members
+    // via requireHousehold, not through this field directly.
+    household: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: 'Household',
       required: true,
     },
   },
   { timestamps: true }
 );
 
-roomSchema.index({ owner: 1, name: 1 }, { unique: true });
+roomSchema.index({ household: 1, name: 1 }, { unique: true });
 
 module.exports = mongoose.model('Room', roomSchema);

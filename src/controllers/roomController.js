@@ -8,7 +8,7 @@ async function createRoom(req, res) {
   }
 
   try {
-    const room = await Room.create({ name: name.trim(), owner: req.userId });
+    const room = await Room.create({ name: name.trim(), household: req.householdId });
     return res.status(201).json({ room });
   } catch (err) {
     if (err.code === 11000) {
@@ -20,7 +20,7 @@ async function createRoom(req, res) {
 }
 
 async function listRooms(req, res) {
-  const rooms = await Room.find({ owner: req.userId }).sort({ name: 1 });
+  const rooms = await Room.find({ household: req.householdId }).sort({ name: 1 });
   return res.json({ rooms });
 }
 
@@ -30,7 +30,7 @@ async function updateRoom(req, res) {
     return res.status(400).json({ error: 'name is required' });
   }
 
-  const room = await Room.findOne({ _id: req.params.id, owner: req.userId });
+  const room = await Room.findOne({ _id: req.params.id, household: req.householdId });
   if (!room) return res.status(404).json({ error: 'room not found' });
 
   room.name = name.trim();
@@ -47,12 +47,15 @@ async function updateRoom(req, res) {
 }
 
 async function deleteRoom(req, res) {
-  const room = await Room.findOne({ _id: req.params.id, owner: req.userId });
+  const room = await Room.findOne({ _id: req.params.id, household: req.householdId });
   if (!room) return res.status(404).json({ error: 'room not found' });
 
   // Unassign (not delete) any devices in this room rather than orphaning
   // the request in a half-deleted state.
-  await Device.updateMany({ room: room._id, owner: req.userId }, { $set: { room: null } });
+  await Device.updateMany(
+    { room: room._id, household: req.householdId },
+    { $set: { room: null } }
+  );
   await room.deleteOne();
 
   return res.json({ status: 'deleted' });

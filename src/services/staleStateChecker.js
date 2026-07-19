@@ -1,11 +1,7 @@
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
-  const { emitDeviceEvent } = require('./socketService');
-
 
 /**
- * Phase 3 risk item: "lastSeen threshold, 'unknown' state distinct from 'off'."
- *
  * A device that's genuinely offline gets an explicit LWT message on its
  * `.../status` topic (handled in mqttSubscriber.js, flips status -> 'offline').
  * But a device can also just... stop talking, with no LWT ever firing (broker
@@ -40,7 +36,8 @@ async function checkStaleDevices() {
     status: 'online',
     lastSeen: { $lt: cutoff },
   });
-  
+
+  const { emitDeviceEvent } = require('./socketService');
 
   for (const device of staleDevices) {
     device.status = 'unknown';
@@ -48,14 +45,14 @@ async function checkStaleDevices() {
 
     await EventLog.create({
       device: device._id,
-      owner: device.owner,
+      household: device.household,
       source: 'mqtt',
       type: 'unknown',
       normalizedState: {},
       rawPayload: null,
     });
 
-    emitDeviceEvent(device.owner.toString(), { deviceId: device._id.toString(), status: 'unknown' });
+    emitDeviceEvent(device.household.toString(), { deviceId: device._id.toString(), status: 'unknown' });
   }
 
   return staleDevices.length;
