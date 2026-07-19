@@ -170,7 +170,10 @@ describe('socketService', () => {
     // Add the same user to a second household so switching is legitimate.
     const secondHousehold = await Household.create({
       name: 'Second Unit',
-      members: [{ user: auth.userId, role: 'manager' }],
+      members: [
+        { user: new mongoose.Types.ObjectId(), role: 'owner' },
+        { user: auth.userId, role: 'manager' },
+      ],
     });
 
     await new Promise((resolve, reject) => {
