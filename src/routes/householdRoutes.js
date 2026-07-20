@@ -9,6 +9,8 @@ const {
   addMember,
   removeMember,
   deleteHousehold,
+  getBrokerInfo,
+  confirmBrokerAcl,
 } = require('../controllers/householdController');
 
 const router = express.Router();
@@ -32,6 +34,17 @@ router.delete(
   requireHousehold,
   requireRole('owner', 'manager'),
   removeMember
+);
+
+// Phase 6 Step 3 — broker-side (HiveMQ ACL) namespacing. Any member can
+// view the topic prefix + setup instructions; only manager+ can mark the
+// (manually-performed, in HiveMQ's console) ACL setup as confirmed.
+router.get('/current/broker-info', requireHousehold, getBrokerInfo);
+router.post(
+  '/current/broker-info/confirm',
+  requireHousehold,
+  requireRole('owner', 'manager'),
+  confirmBrokerAcl
 );
 router.delete('/current', requireHousehold, requireRole('owner'), deleteHousehold);
 

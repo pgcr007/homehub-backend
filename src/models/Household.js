@@ -26,6 +26,11 @@ const householdSchema = new mongoose.Schema(
     // 'unit' = one property-manager-owned rental/office unit; a manager
     // typically has many of these.
     type: { type: String, enum: ['residential', 'unit'], default: 'residential' },
+    mqttAcl: {
+      configured: { type: Boolean, default: false },
+      brokerUsername: { type: String, trim: true, default: null },
+      configuredAt: { type: Date, default: null },
+    },
     members: {
       type: [memberSchema],
       default: [],

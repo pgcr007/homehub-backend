@@ -1,6 +1,7 @@
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
 const { normalizeEvent } = require('./eventNormalizer');
+const Household = require('../models/Household');
 
 /**
  * This is the MQTT-side mirror of webhookController.js. The webhook-in path
@@ -24,6 +25,29 @@ const STATE_TOPIC_RE = /^home\/([^/]+)\/([^/]+)\/state$/;
 const STATUS_TOPIC_RE = /^home\/([^/]+)\/([^/]+)\/status$/;
 const NORMALIZED_TOPIC_RE = /^home\/([^/]+)\/([^/]+)\/normalized$/;
 
+/**
+ * Phase 6 Step 3 defense-in-depth. The broker's own ACLs (see
+ * docs/PHASE6_STEP3_BROKER_ACL.md) are what's actually supposed to stop a
+ * device credential from ever publishing outside its own household's topic
+ * tree — but that's configured in HiveMQ Cloud's console, which this
+ * backend has no API visibility into and can't unit-test. This check
+ * can't catch an ACL that's misconfigured too *broad* (no way to inspect
+ * that from here), but it does catch the cheaper, more common failure: a
+ * message arriving for a household ID that doesn't exist at all, which
+ * only happens via a typo'd/spoofed topic or a household that's since been
+ * deleted. Logged distinctly from an ordinary "device not registered"
+ * miss (see findDeviceByIdentifier below) so it's easy to grep for as a
+ * possible ACL/security issue rather than routine noise.
+ */
+async function householdExists(householdId) {
+  try {
+    return Boolean(await Household.exists({ _id: householdId }));
+  } catch {
+    // Malformed ObjectId — definitely not a real household.
+    return false;
+  }
+}
+
 /** Looks up a device by household+identifier, the same compound-unique key used at registration. */
 async function findDeviceByIdentifier(householdId, identifier) {
   try {
@@ -40,6 +64,13 @@ async function findDeviceByIdentifier(householdId, identifier) {
  * Mirrors handleWebhookEvent's state-write logic exactly, source tagged 'mqtt' instead of 'webhook'.
  */
 async function handleStateTopic(householdId, identifier, payloadBuffer) {
+  if (!(await householdExists(householdId))) {
+    console.warn(
+      `[mqtt][security] state message for unknown household=${householdId} identifier=${identifier} — possible ACL misconfiguration or stale/spoofed topic, dropping`
+    );
+    return;
+  }
+
   const device = await findDeviceByIdentifier(householdId, identifier);
   if (!device) {
     console.warn(`[mqtt] no device registered for household=${householdId} identifier=${identifier}, dropping message`);
@@ -114,6 +145,13 @@ async function handleStateTopic(householdId, identifier, payloadBuffer) {
  * ("online"/"offline") work the same way without a separate code path.
  */
 async function handleStatusTopic(householdId, identifier, payloadBuffer) {
+  if (!(await householdExists(householdId))) {
+    console.warn(
+      `[mqtt][security] status message for unknown household=${householdId} identifier=${identifier} — possible ACL misconfiguration or stale/spoofed topic, dropping`
+    );
+    return;
+  }
+
   const device = await findDeviceByIdentifier(householdId, identifier);
   if (!device) {
     console.warn(`[mqtt] no device registered for household=${householdId} identifier=${identifier}, dropping status message`);
@@ -188,4 +226,5 @@ module.exports = {
   handleStateTopic,
   handleStatusTopic,
   handleNormalizedTopic,
+  householdExists,
 };

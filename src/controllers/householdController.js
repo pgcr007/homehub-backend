@@ -123,6 +123,56 @@ async function removeMember(req, res) {
   }
 }
 
+async function getBrokerInfo(req, res) {
+  const household = req.household;
+  const topicPrefix = `home/${household._id}`;
+
+  return res.json({
+    householdId: household._id.toString(),
+    topicPrefix,
+    topics: {
+      state: `${topicPrefix}/{identifier}/state`,
+      status: `${topicPrefix}/{identifier}/status`,
+      normalized: `${topicPrefix}/{deviceId}/normalized`,
+      cmd: `${topicPrefix}/{identifier}/cmd`,
+    },
+    mqttAcl: {
+      configured: household.mqttAcl?.configured || false,
+      brokerUsername: household.mqttAcl?.brokerUsername || null,
+      configuredAt: household.mqttAcl?.configuredAt || null,
+    },
+    setupInstructions:
+      'In the HiveMQ Cloud console, under Access Management, create a dedicated credential for ' +
+      `this household, then add a Permission scoped to topic filter "${topicPrefix}/#" with ` +
+      'Publish and Subscribe both checked. Give that credential — not the shared backend service ' +
+      'credential — to whatever device or gateway is physically installed at this unit. Full runbook: ' +
+      'docs/PHASE6_STEP3_BROKER_ACL.md.',
+  });
+}
+
+
+async function confirmBrokerAcl(req, res) {
+  const { brokerUsername } = req.body;
+  if (!brokerUsername || !brokerUsername.trim()) {
+    return res.status(400).json({ error: 'brokerUsername is required' });
+  }
+
+  req.household.mqttAcl = {
+    configured: true,
+    brokerUsername: brokerUsername.trim(),
+    configuredAt: new Date(),
+  };
+
+  try {
+    await req.household.save();
+    return res.json({ mqttAcl: req.household.mqttAcl });
+  } catch (err) {
+    console.error('[households] confirmBrokerAcl error:', err.message);
+    return res.status(500).json({ error: 'failed to save broker ACL confirmation' });
+  }
+}
+
+
 // owner only.
 async function deleteHousehold(req, res) {
   if (req.householdRole !== 'owner') {
@@ -143,4 +193,6 @@ module.exports = {
   addMember,
   removeMember,
   deleteHousehold,
+  getBrokerInfo,
+  confirmBrokerAcl,
 };

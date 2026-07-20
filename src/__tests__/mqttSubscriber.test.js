@@ -16,6 +16,7 @@ jest.mock('../services/socketService', () => ({
 
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
+const Household = require('../models/Household');
 const { publishNormalizedEvent } = require('../services/mqttService');
 const { emitDeviceEvent } = require('../services/socketService');
 const {
@@ -23,12 +24,17 @@ const {
   handleStateTopic,
   handleStatusTopic,
   handleNormalizedTopic,
+  householdExists,
 } = require('../services/mqttSubscriber');
 
 async function createDevice(overrides = {}) {
+  const household = await Household.create({
+    name: 'Test Household',
+    members: [{ user: new mongoose.Types.ObjectId(), role: 'owner' }],
+  });
   return Device.create({
     name: 'Test Plug',
-    household: new mongoose.Types.ObjectId(),
+    household: household._id,
     createdBy: new mongoose.Types.ObjectId(),
     type: 'tasmota_plug',
     protocol: 'mqtt',
@@ -145,6 +151,46 @@ describe('mqttSubscriber', () => {
 
       const updated = await Device.findById(device._id);
       expect(updated.status).toBe('online'); // unchanged
+      expect(await EventLog.countDocuments()).toBe(0);
+    });
+  });
+
+  describe('householdExists defense-in-depth check (Phase 6 Step 3)', () => {
+    it('returns true for a real household id', async () => {
+      const household = await Household.create({
+        name: 'Real Household',
+        members: [{ user: new mongoose.Types.ObjectId(), role: 'owner' }],
+      });
+      expect(await householdExists(household._id.toString())).toBe(true);
+    });
+
+    it('returns false for a well-formed but nonexistent household id', async () => {
+      expect(await householdExists(new mongoose.Types.ObjectId().toString())).toBe(false);
+    });
+
+    it('returns false (not a throw) for a malformed household id', async () => {
+      await expect(householdExists('not-an-object-id')).resolves.toBe(false);
+    });
+
+    it('drops a state message for an unknown household without looking up a device', async () => {
+      const device = await createDevice();
+      const fakeHouseholdId = new mongoose.Types.ObjectId().toString();
+
+      await handleStateTopic(fakeHouseholdId, device.identifier, Buffer.from(JSON.stringify({ POWER: 'ON' })));
+
+      const unchanged = await Device.findById(device._id);
+      expect(unchanged.state).toEqual({});
+      expect(await EventLog.countDocuments()).toBe(0);
+    });
+
+    it('drops a status message for an unknown household without updating any device', async () => {
+      const device = await createDevice({ status: 'online' });
+      const fakeHouseholdId = new mongoose.Types.ObjectId().toString();
+
+      await handleStatusTopic(fakeHouseholdId, device.identifier, Buffer.from('Offline'));
+
+      const unchanged = await Device.findById(device._id);
+      expect(unchanged.status).toBe('online'); // unchanged, not flipped to offline
       expect(await EventLog.countDocuments()).toBe(0);
     });
   });
