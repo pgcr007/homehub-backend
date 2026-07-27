@@ -1,5 +1,6 @@
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
+const { sendToHousehold } = require('./fcmService');
 
 /**
  * A device that's genuinely offline gets an explicit LWT message on its
@@ -53,6 +54,20 @@ async function checkStaleDevices() {
     });
 
     emitDeviceEvent(device.household.toString(), { deviceId: device._id.toString(), status: 'unknown' });
+
+    // Phase 7: this only runs for devices the query above already scoped to
+    // status: 'online' (i.e. this sweep is the first to notice), so it
+    // fires exactly once per stale transition — no repeat-sweep spam for a
+    // device that stays silent across multiple sweeps.
+    try {
+      const minutes = Math.round(thresholdMs / 60000);
+      await sendToHousehold(device.household, {
+        title: 'Device unreachable',
+        body: `${device.name} hasn't reported in over ${minutes} minute${minutes === 1 ? '' : 's'}`,
+      });
+    } catch (err) {
+      console.warn(`[stale-state] notification failed for device ${device._id}: ${err.message}`);
+    }
   }
 
   return staleDevices.length;

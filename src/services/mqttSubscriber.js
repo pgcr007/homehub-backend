@@ -1,7 +1,8 @@
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
-const { normalizeEvent } = require('./eventNormalizer');
 const Household = require('../models/Household');
+const { normalizeEvent } = require('./eventNormalizer');
+const { sendToHousehold } = require('./fcmService');
 
 /**
  * This is the MQTT-side mirror of webhookController.js. The webhook-in path
@@ -168,6 +169,7 @@ async function handleStatusTopic(householdId, identifier, payloadBuffer) {
 
   // This is a protocol-level signal (broker-detected connect/disconnect), not a capability
   // reading, so it updates `status` directly rather than going through normalizeEvent.
+  const previousStatus = device.status;
   device.status = isOnline ? 'online' : 'offline';
   if (isOnline) device.lastSeen = new Date();
   await device.save();
@@ -185,6 +187,21 @@ async function handleStatusTopic(householdId, identifier, payloadBuffer) {
   // require as publishNormalizedEvent above, same circular-import reason.
   const { emitDeviceEvent } = require('./socketService');
   emitDeviceEvent(device.household.toString(), { deviceId: device._id.toString(), status: device.status });
+
+  // Phase 7: push alert on a genuine offline transition. Gated on
+  // previousStatus to avoid re-notifying on a retained-LWT redelivery of
+  // the same "Offline" payload (brokers commonly retain LWT messages, so a
+  // reconnecting subscriber can receive one it's already acted on).
+  if (isOffline && previousStatus !== 'offline') {
+    try {
+      await sendToHousehold(device.household, {
+        title: 'Device offline',
+        body: `${device.name} went offline`,
+      });
+    } catch (err) {
+      console.warn(`[mqtt] offline notification failed for device ${device._id}: ${err.message}`);
+    }
+  }
 }
 
 /**

@@ -13,12 +13,18 @@ jest.mock('../services/mqttService', () => ({
 jest.mock('../services/socketService', () => ({
   emitDeviceEvent: jest.fn(),
 }));
+// fcmService is required top-level by mqttSubscriber.js (no circular-import
+// concern there, unlike mqttService/socketService), so this mock covers it.
+jest.mock('../services/fcmService', () => ({
+  sendToHousehold: jest.fn(),
+}));
 
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
 const Household = require('../models/Household');
 const { publishNormalizedEvent } = require('../services/mqttService');
 const { emitDeviceEvent } = require('../services/socketService');
+const { sendToHousehold } = require('../services/fcmService');
 const {
   handleIncomingMessage,
   handleStateTopic,
@@ -27,6 +33,11 @@ const {
   householdExists,
 } = require('../services/mqttSubscriber');
 
+// Phase 6 Step 3's householdExists check means a device's `household` field
+// now has to point at a real Household document, not just any ObjectId —
+// otherwise handleStateTopic/handleStatusTopic will (correctly) treat it as
+// an unknown/spoofed household and drop the message before ever looking up
+// the device.
 async function createDevice(overrides = {}) {
   const household = await Household.create({
     name: 'Test Household',
@@ -153,6 +164,30 @@ describe('mqttSubscriber', () => {
       expect(updated.status).toBe('online'); // unchanged
       expect(await EventLog.countDocuments()).toBe(0);
     });
+
+    it('sends a push alert naming the device on a genuine online->offline transition', async () => {
+      const device = await createDevice({ name: 'Front Door Sensor', status: 'online' });
+      await handleStatusTopic(device.household.toString(), device.identifier, Buffer.from('Offline'));
+
+      expect(sendToHousehold).toHaveBeenCalledTimes(1);
+      const [householdArg, notificationArg] = sendToHousehold.mock.calls[0];
+      expect(householdArg.toString()).toBe(device.household.toString());
+      expect(notificationArg.body).toContain('Front Door Sensor');
+    });
+
+    it('does not re-send an offline alert for a retained-LWT redelivery of the same status', async () => {
+      const device = await createDevice({ status: 'offline' });
+      await handleStatusTopic(device.household.toString(), device.identifier, Buffer.from('Offline'));
+
+      expect(sendToHousehold).not.toHaveBeenCalled();
+    });
+
+    it('does not send an offline alert on an online transition', async () => {
+      const device = await createDevice({ status: 'offline' });
+      await handleStatusTopic(device.household.toString(), device.identifier, Buffer.from('online'));
+
+      expect(sendToHousehold).not.toHaveBeenCalled();
+    });
   });
 
   describe('householdExists defense-in-depth check (Phase 6 Step 3)', () => {
@@ -178,6 +213,8 @@ describe('mqttSubscriber', () => {
 
       await handleStateTopic(fakeHouseholdId, device.identifier, Buffer.from(JSON.stringify({ POWER: 'ON' })));
 
+      // The real device (registered under a different, real household) must
+      // be untouched — this message should never have reached the device lookup.
       const unchanged = await Device.findById(device._id);
       expect(unchanged.state).toEqual({});
       expect(await EventLog.countDocuments()).toBe(0);

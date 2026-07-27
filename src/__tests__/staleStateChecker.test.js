@@ -3,8 +3,15 @@ const { connectTestDB, clearTestDB, disconnectTestDB } = require('../testUtils/t
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 
+// fcmService is required top-level by staleStateChecker.js; mock it so these
+// tests never touch Firebase and can assert on call args directly.
+jest.mock('../services/fcmService', () => ({
+  sendToHousehold: jest.fn(),
+}));
+
 const Device = require('../models/Device');
 const EventLog = require('../models/EventLog');
+const { sendToHousehold } = require('../services/fcmService');
 const { checkStaleDevices, getStaleThresholdMs } = require('../services/staleStateChecker');
 
 async function createDevice(overrides = {}) {
@@ -30,6 +37,7 @@ describe('staleStateChecker', () => {
 
   beforeEach(async () => {
     await clearTestDB();
+    sendToHousehold.mockClear();
   });
 
   it('demotes an online device whose lastSeen is past the threshold to unknown', async () => {
@@ -47,6 +55,29 @@ describe('staleStateChecker', () => {
     expect(events[0].type).toBe('unknown');
     expect(events[0].source).toBe('mqtt');
     expect(events[0].household.toString()).toBe(device.household.toString());
+  });
+
+  it('sends exactly one push alert per stale transition, naming the device and the threshold', async () => {
+    const staleCutoff = new Date(Date.now() - getStaleThresholdMs() - 1000);
+    const device = await createDevice({ name: 'Living Room Plug', status: 'online', lastSeen: staleCutoff });
+
+    await checkStaleDevices();
+
+    expect(sendToHousehold).toHaveBeenCalledTimes(1);
+    const [householdArg, notificationArg] = sendToHousehold.mock.calls[0];
+    expect(householdArg.toString()).toBe(device.household.toString());
+    expect(notificationArg.body).toContain('Living Room Plug');
+  });
+
+  it('does not send a duplicate alert on a later sweep for a device already unknown', async () => {
+    const staleCutoff = new Date(Date.now() - getStaleThresholdMs() - 1000);
+    await createDevice({ status: 'online', lastSeen: staleCutoff });
+
+    await checkStaleDevices(); // first sweep: demotes + notifies
+    sendToHousehold.mockClear();
+    await checkStaleDevices(); // second sweep: device is already 'unknown', query excludes it
+
+    expect(sendToHousehold).not.toHaveBeenCalled();
   });
 
   it('leaves an online device with a recent lastSeen untouched', async () => {
