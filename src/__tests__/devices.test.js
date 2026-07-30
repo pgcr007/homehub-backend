@@ -165,4 +165,55 @@ describe('Device API', () => {
     expect(patch.body.device.type).toBe('tasmota_plug'); // unchanged
     expect(patch.body.device.identifier).toBe('immutable-1'); // unchanged
   });
+
+  // bulkCommand's success path (actually publishing) needs a connected MQTT
+  // client, same as sendCommand — not exercised here for the same reason
+  // sendCommand isn't above. These cover the validation guardrails, which
+  // are the part most likely to regress silently (e.g. an off-by-one on the
+  // 50-device cap, or a body-shape check accidentally loosened).
+  it('rejects a bulk command with an empty deviceIds array', async () => {
+    const res = await request(app)
+      .post('/api/devices/bulk-command')
+      .set(auth.headers)
+      .send({ deviceIds: [], command: { power: 'off' } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/deviceIds must be a non-empty array/);
+  });
+
+  it('rejects a bulk command over the 50-device cap', async () => {
+    const tooMany = Array.from({ length: 51 }, (_, i) => `000000000000000000000${i}`.slice(-24));
+    const res = await request(app)
+      .post('/api/devices/bulk-command')
+      .set(auth.headers)
+      .send({ deviceIds: tooMany, command: { power: 'off' } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/cannot exceed 50/);
+  });
+
+  it('rejects a bulk command with an empty command object', async () => {
+    const created = await request(app)
+      .post('/api/devices')
+      .set(auth.headers)
+      .send({ name: 'Bulk Test Plug', type: 'tasmota_plug', identifier: 'bulk-1' });
+
+    const res = await request(app)
+      .post('/api/devices/bulk-command')
+      .set(auth.headers)
+      .send({ deviceIds: [created.body.device._id], command: {} });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/command body must be a non-empty object/);
+  });
+
+  it('reports not_found for a bulk command targeting a nonexistent device id', async () => {
+    const res = await request(app)
+      .post('/api/devices/bulk-command')
+      .set(auth.headers)
+      .send({ deviceIds: ['000000000000000000000000'], command: { power: 'off' } });
+    // Not a 4xx here — a mixed batch of valid/invalid ids should still
+    // process the valid ones, so the per-id outcome lives in the results
+    // array instead of failing the whole request.
+    expect(res.status).toBe(200);
+    expect(res.body.results[0]).toEqual({ deviceId: '000000000000000000000000', status: 'not_found' });
+    expect(res.body.sentCount).toBe(0);
+  });
 });

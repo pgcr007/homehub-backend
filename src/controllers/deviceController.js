@@ -120,6 +120,60 @@ async function sendCommand(req, res) {
 }
 
 /**
+ * POST /api/devices/bulk-command
+ * body: { deviceIds: [id, id, ...], command: { power: "off" } }
+ *
+ * Property-manager bulk actions ("turn off all in this unit/room"). The
+ * Android client already has the relevant device list in front of it
+ * (every device in a room section, or every device in the household), so
+ * this just fans one command out to each id instead of the client making
+ * N separate /:id/command round trips itself.
+ *
+ * Best-effort per device rather than all-or-nothing: a non-MQTT device or
+ * one that's since been deleted shouldn't stop the rest of the batch from
+ * going out, so each id gets its own status in the response instead of the
+ * whole request failing on the first problem.
+ */
+async function bulkCommand(req, res) {
+  try {
+    const { deviceIds, command } = req.body;
+
+    if (!Array.isArray(deviceIds) || deviceIds.length === 0) {
+      return res.status(400).json({ error: 'deviceIds must be a non-empty array' });
+    }
+    if (deviceIds.length > 50) {
+      return res.status(400).json({ error: 'deviceIds cannot exceed 50 per request' });
+    }
+    if (!command || typeof command !== 'object' || Array.isArray(command) || Object.keys(command).length === 0) {
+      return res.status(400).json({ error: 'command body must be a non-empty object, e.g. { "power": "off" }' });
+    }
+
+    const devices = await Device.find({ _id: { $in: deviceIds }, household: req.householdId });
+    const deviceById = new Map(devices.map((d) => [d._id.toString(), d]));
+
+    const results = deviceIds.map((id) => {
+      const device = deviceById.get(id);
+      if (!device) return { deviceId: id, status: 'not_found' };
+      if (device.protocol !== 'mqtt') {
+        return { deviceId: id, status: 'skipped', reason: 'not an MQTT device' };
+      }
+      try {
+        const topic = publishCommand(device, command);
+        return { deviceId: id, status: 'sent', topic };
+      } catch (err) {
+        return { deviceId: id, status: 'failed', reason: err.message };
+      }
+    });
+
+    const sentCount = results.filter((r) => r.status === 'sent').length;
+    return res.json({ status: 'completed', sentCount, total: deviceIds.length, results });
+  } catch (err) {
+    console.error('[devices] bulk command error:', err.message);
+    return res.status(500).json({ error: 'failed to send bulk command' });
+  }
+}
+
+/**
  * GET /api/devices/:id/webhook-secret
  * Separate from the main device payload so the secret isn't echoed back on
  * every ordinary list/get call — only fetched when actually needed.
@@ -181,4 +235,5 @@ module.exports = {
   updateDevice,
   deleteDevice,
   sendCommand,
+  bulkCommand,
 };
