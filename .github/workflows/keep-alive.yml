@@ -1,0 +1,33 @@
+name: Keep Render backend warm
+
+# Render's free tier spins the backend down after ~15 minutes of inactivity,
+# and the first request after that takes 30-50s to wake it back up (see
+# ApiClient.kt's 60s OkHttp timeouts, added specifically to survive that). A
+# cold start on a demo or during Phase 8 QA is a bad first impression and an
+# easy source of "is it broken?" confusion — this workflow just pings the
+# existing unauthenticated /health endpoint often enough that the instance
+# never gets the chance to spin down, without needing to upgrade Render's
+# tier or add any new backend code.
+#
+# 10-minute interval, safely under the ~15-minute spin-down window even
+# accounting for GitHub's scheduled-workflow runs sometimes firing a few
+# minutes late under load. Runs ~144 times/day; each run is a single curl
+# call with no checkout/npm install, so it's negligible against GitHub
+# Actions' free minutes.
+#
+# Note: GitHub disables scheduled workflows on a repo after 60 days with no
+# commits — not a concern during active development, but worth knowing if
+# this ever silently stops running after a long gap.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: # lets you trigger a one-off ping manually from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: |
+          curl --fail --silent --show-error \
+            "https://homehub-backend-k6qj.onrender.com/health"
