@@ -1,0 +1,14 @@
+{
+  "devices": [
+    {
+      "householdId": "6a5b8b18047c347b2c90989f",
+      "identifier": "plug-1",
+      "type": "tasmota_plug"
+    },
+    {
+      "householdId": "6a5b8b18047c347b2c90989f",
+      "identifier": "motion-1",
+      "type": "esphome_motion_sensor"
+    }
+  ]
+}
