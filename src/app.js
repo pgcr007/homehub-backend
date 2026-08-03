@@ -11,6 +11,7 @@ const deviceRoutes = require('./routes/deviceRoutes');
 const roomRoutes = require('./routes/roomRoutes');
 const eventRoutes = require('./routes/eventRoutes');
 const ruleRoutes = require('./routes/ruleRoutes');
+const insightsRoutes = require('./routes/insightsRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const requireAuth = require('./middleware/requireAuth');
 const User = require('./models/User');
@@ -110,6 +111,7 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/rules', ruleRoutes);
+app.use('/api/insights', insightsRoutes);
 
 // 404 handler
 app.use((req, res) => {
