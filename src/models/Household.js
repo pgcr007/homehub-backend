@@ -13,8 +13,17 @@ const memberSchema = new mongoose.Schema(
     // 'manager' can invite/remove members and manage devices+rules but can't
     // delete the household itself. 'member' has normal dashboard access
     // (view/control devices, view rules) but can't manage membership.
-    role: { type: String, enum: ['owner', 'manager', 'member'], default: 'member' },
+    // 'guest' is a time-boxed variant of 'member' — same dashboard access,
+    // but requires expiresAt and is treated as a non-member automatically
+    // once that time passes (see roleOf/isMember below). No separate expiry
+    // job: it's checked lazily on read, same "derive on read" approach used
+    // for usage insights.
+    role: { type: String, enum: ['owner', 'manager', 'member', 'guest'], default: 'member' },
     joinedAt: { type: Date, default: Date.now },
+    // Required for 'guest' (enforced in householdController.addMember, not
+    // here, so the error message can be role-specific). Ignored for every
+    // other role.
+    expiresAt: { type: Date, default: null },
   },
   { _id: false }
 );
@@ -47,7 +56,15 @@ householdSchema.index({ 'members.user': 1 });
 
 householdSchema.methods.roleOf = function (userId) {
   const member = this.members.find((m) => m.user.toString() === userId.toString());
-  return member ? member.role : null;
+  if (!member) return null;
+  if (member.role === 'guest' && member.expiresAt && member.expiresAt.getTime() <= Date.now()) {
+    // Expired guest access. Treated identically to "never a member" rather
+    // than deleting the subdocument here, so the expiry timestamp is
+    // preserved for the members list / audit trail instead of silently
+    // vanishing. A manager can still see it (grayed out) and remove it.
+    return null;
+  }
+  return member.role;
 };
 
 householdSchema.methods.isMember = function (userId) {

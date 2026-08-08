@@ -55,19 +55,38 @@ async function getHousehold(req, res) {
 // manager+ only (enforced by requireRole in the route). Adds an existing
 // user (by email) as a member. Phase 6 keeps this simple — no invite-email
 // flow yet, the person being added must already have a HomeHub account.
+// manager+ only (enforced by requireRole in the route). Adds an existing
+// user (by email) as a member. Phase 6 keeps this simple — no invite-email
+// flow yet, the person being added must already have a HomeHub account.
+// 'guest' additionally requires expiresAt — that's the entire point of the
+// role, so it's not optional the way it is for owner/manager/member.
 async function addMember(req, res) {
-  const { email, role } = req.body;
+  const { email, role, expiresAt } = req.body;
   if (!email) {
     return res.status(400).json({ error: 'email is required' });
   }
   const targetRole = role || 'member';
-  if (!['owner', 'manager', 'member'].includes(targetRole)) {
+  if (!['owner', 'manager', 'member', 'guest'].includes(targetRole)) {
     return res.status(400).json({ error: 'invalid role' });
   }
   // Only an owner can grant the owner role — a manager elevating someone to
   // owner (and thus household-deletion rights) would be a privilege escalation.
   if (targetRole === 'owner' && req.householdRole !== 'owner') {
     return res.status(403).json({ error: 'only an owner can add another owner' });
+  }
+
+  let parsedExpiresAt = null;
+  if (targetRole === 'guest') {
+    if (!expiresAt) {
+      return res.status(400).json({ error: 'expiresAt is required for guest access' });
+    }
+    parsedExpiresAt = new Date(expiresAt);
+    if (Number.isNaN(parsedExpiresAt.getTime())) {
+      return res.status(400).json({ error: 'expiresAt must be a valid date' });
+    }
+    if (parsedExpiresAt.getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'expiresAt must be in the future' });
+    }
   }
 
   try {
@@ -77,11 +96,26 @@ async function addMember(req, res) {
     }
 
     const household = req.household;
-    if (household.isMember(user._id)) {
-      return res.status(409).json({ error: 'user is already a member' });
+
+    // isMember() ignores expired guest entries, so re-inviting a guest whose
+    // access lapsed falls through to here instead of hitting the 409 below —
+    // but the stale subdocument has to be dropped first or the household
+    // ends up with two entries for the same user.
+    const existingIndex = household.members.findIndex(
+      (m) => m.user.toString() === user._id.toString()
+    );
+    if (existingIndex !== -1) {
+      if (household.isMember(user._id)) {
+        return res.status(409).json({ error: 'user is already a member' });
+      }
+      household.members.splice(existingIndex, 1);
     }
 
-    household.members.push({ user: user._id, role: targetRole });
+    household.members.push({
+      user: user._id,
+      role: targetRole,
+      expiresAt: parsedExpiresAt,
+    });
     await household.save();
 
     const populated = await household.populate('members.user', 'email name');
